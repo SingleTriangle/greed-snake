@@ -3,6 +3,8 @@
 A retro pixel-art snake game built with HTML5 Canvas and Web Audio API — no external dependencies, fully self-contained in a single HTML file.
 
 [Live Demo](https://github.com/SingleTriangle/greed-snake) · [简体中文](./GAME_GUIDE.md)
+<img width="1005" height="1008" alt="image" src="https://github.com/user-attachments/assets/ad966cdd-b5a2-4398-9435-dedefba3640a" />
+
 
 ---
 
