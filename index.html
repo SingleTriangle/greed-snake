@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Greed Snake</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #050508;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-family: 'Press Start 2P', 'Courier New', monospace;
+      overflow: hidden;
+    }
+    #gameContainer {
+      position: relative;
+    }
+    #gameCanvas {
+      display: block;
+      border: 2px solid #1a1a2e;
+      box-shadow: 0 0 40px rgba(57, 255, 20, 0.15);
+    }
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: rgba(10, 10, 15, 0.9);
+      color: #39ff14;
+      text-align: center;
+      line-height: 2;
+    }
+    #overlay.hidden {
+      display: none;
+    }
+    #overlay h1 {
+      font-size: 24px;
+      margin-bottom: 20px;
+      text-shadow: 0 0 20px #39ff14;
+    }
+    #overlay p {
+      font-size: 10px;
+      color: #00ff88;
+    }
+    #overlay .score-display {
+      font-size: 14px;
+      margin: 15px 0;
+      color: #ffcc00;
+    }
+    #overlay .controls {
+      font-size: 8px;
+      color: #666;
+      margin-top: 20px;
+      line-height: 2.5;
+    }
+    .blink {
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="640" height="640"></canvas>
+    <div id="overlay">
+      <h1>GREED SNAKE</h1>
+      <p class="blink">PRESS SPACE TO START</p>
+      <div class="controls">
+        ARROW KEYS or WASD to move<br>
+        P or ESC to pause
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============ CONSTANTS ============
+    const GRID_SIZE = 20;
+    const CELL_SIZE = 32;
+    const CANVAS_SIZE = GRID_SIZE * CELL_SIZE;
+    const BASE_SPEED = 120;
+    const LEVEL_THRESHOLDS = [50, 120, 220, 350, 500];
+    const OBSTACLE_COUNT = 10;
+    const POWERUP_COUNT = 3;
+    const POWERUP_DURATION = 5000;
+
+    const COLORS = {
+      background: '#0a0a0f',
+      gridLine: 'rgba(26, 26, 46, 0.3)',
+      snakeHead: '#39ff14',
+      snakeBody: '#00ff88',
+      snakeTail: '#00cc66',
+      food: '#ff0066',
+      obstacle: '#888888',
+      speedUp: '#ffcc00',
+      speedDown: '#3399ff'
+    };
+
+    // ============ AUDIO ============
+    let audioCtx = null;
+
+    function ensureAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function playTone(frequency, duration, type = 'sine', volume = 0.3, startTime = 0) {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = type;
+      osc.frequency.setValueAtTime(frequency, audioCtx.currentTime + startTime);
+      gain.gain.setValueAtTime(volume, audioCtx.currentTime + startTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + startTime + duration);
+      osc.start(audioCtx.currentTime + startTime);
+      osc.stop(audioCtx.currentTime + startTime + duration);
+    }
+
+    function playEat() {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.15);
+    }
+
+    function playPowerUp() {
+      playTone(660, 0.2, 'sine', 0.3, 0);
+      playTone(880, 0.2, 'sine', 0.3, 0);
+    }
+
+    function playObstacleHit() {
+      playTone(100, 0.08, 'square', 0.3);
+    }
+
+    function playGameOver() {
+      [400, 300, 200, 100].forEach((freq, i) => {
+        playTone(freq, 0.1, 'sawtooth', 0.4, i * 0.08);
+      });
+    }
+
+    function playLevelUp() {
+      [523, 659, 784, 1047].forEach((freq, i) => {
+        playTone(freq, 0.12, 'sine', 0.3, i * 0.1);
+      });
+    }
+
+    function playWallHit() {
+      playTone(80, 0.12, 'sawtooth', 0.4);
+    }
+
+    function playWin() {
+      [261, 329, 392, 523, 392, 329, 261].forEach((freq, i) => {
+        playTone(freq, 0.15, 'sine', 0.3, i * 0.12);
+      });
+    }
+
+    // ============ STATE ============
+    const GameState = {
+      START: 'START',
+      PLAYING: 'PLAYING',
+      PAUSED: 'PAUSED',
+      LEVEL_UP: 'LEVEL_UP',
+      GAME_OVER: 'GAME_OVER',
+      WIN: 'WIN'
+    };
+
+    const Direction = {
+      UP: { x: 0, y: -1 },
+      DOWN: { x: 0, y: 1 },
+      LEFT: { x: -1, y: 0 },
+      RIGHT: { x: 1, y: 0 }
+    };
+
+    let state = {
+      gameState: GameState.START,
+      snake: [],
+      direction: Direction.RIGHT,
+      nextDirection: Direction.RIGHT,
+      food: null,
+      obstacles: [],
+      powerUps: [],
+      score: 0,
+      level: 1,
+      highScore: parseInt(localStorage.getItem('greedSnakeHighScore')) || 0,
+      speed: BASE_SPEED,
+      speedMultiplier: 1,
+      speedTimer: null,
+      lastMoveTime: 0,
+      levelUpTimer: 0,
+      pulsePhase: 0
+    };
+
+    // ============ CANVAS ============
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+
+    // ============ INPUT ============
+    document.addEventListener('keydown', (e) => {
+      ensureAudio();
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (state.gameState === GameState.START || 
+            state.gameState === GameState.GAME_OVER ||
+            state.gameState === GameState.WIN) {
+          startGame();
+        }
+        return;
+      }
+
+      if (e.code === 'KeyP' || e.code === 'Escape') {
+        e.preventDefault();
+        if (state.gameState === GameState.PLAYING) {
+          state.gameState = GameState.PAUSED;
+          showOverlay('PAUSED', '<p class="blink">PRESS P TO RESUME</p>');
+        } else if (state.gameState === GameState.PAUSED) {
+          state.gameState = GameState.PLAYING;
+          hideOverlay();
+        }
+        return;
+      }
+
+      if (state.gameState !== GameState.PLAYING) return;
+
+      let newDir = null;
+      switch (e.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          newDir = Direction.UP;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          newDir = Direction.DOWN;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          newDir = Direction.LEFT;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          newDir = Direction.RIGHT;
+          break;
+      }
+
+      if (newDir) {
+        e.preventDefault();
+        // Block 180° turns: can't go directly opposite current direction
+        const is180 = state.direction.x + newDir.x === 0 && state.direction.y + newDir.y === 0;
+        if (!is180) {
+          // Apply immediately for responsive controls
+          state.direction = newDir;
+          state.nextDirection = newDir;
+        }
+      }
+    });
+
+    // ============ HELPERS ============
+    function randomGridPos(exclude = []) {
+      let pos;
+      let attempts = 0;
+      do {
+        pos = {
+          x: Math.floor(Math.random() * GRID_SIZE),
+          y: Math.floor(Math.random() * GRID_SIZE)
+        };
+        attempts++;
+      } while (attempts < 100 && exclude.some(p => p && p.x === pos.x && p.y === pos.y));
+      return pos;
+    }
+
+    function posEquals(a, b) {
+      return a && b && a.x === b.x && a.y === b.y;
+    }
+
+    function isOccupied(pos, items) {
+      return items.some(item => posEquals(item, pos));
+    }
+
+    function getAllOccupied() {
+      return [state.snake[0], state.food, ...state.obstacles, ...state.powerUps].filter(Boolean);
+    }
+
+    // ============ GAME LOGIC ============
+    function startGame() {
+      state = {
+        ...state,
+        gameState: GameState.PLAYING,
+        snake: [
+          { x: Math.floor(GRID_SIZE / 2), y: Math.floor(GRID_SIZE / 2) },
+          { x: Math.floor(GRID_SIZE / 2) - 1, y: Math.floor(GRID_SIZE / 2) },
+          { x: Math.floor(GRID_SIZE / 2) - 2, y: Math.floor(GRID_SIZE / 2) }
+        ],
+        direction: Direction.RIGHT,
+        nextDirection: Direction.RIGHT,
+        score: 0,
+        level: 1,
+        speed: BASE_SPEED,
+        speedMultiplier: 1,
+        lastMoveTime: 0,
+        food: null,
+        obstacles: [],
+        powerUps: [],
+        levelUpTimer: 0
+      };
+
+      if (state.speedTimer) {
+        clearTimeout(state.speedTimer);
+        state.speedTimer = null;
+      }
+
+      spawnFood();
+      spawnObstacles();
+      spawnPowerUps();
+      hideOverlay();
+    }
+
+    function spawnFood() {
+      const occupied = [state.snake[0], ...state.obstacles, ...state.powerUps];
+      state.food = randomGridPos(occupied);
+    }
+
+    function spawnObstacles() {
+      state.obstacles = [];
+      const occupied = [...state.snake];
+
+      for (let i = 0; i < OBSTACLE_COUNT; i++) {
+        let pos;
+        let attempts = 0;
+        do {
+          pos = randomGridPos(occupied);
+          attempts++;
+        } while (attempts < 100 && isOccupied(pos, occupied));
+
+        if (attempts < 100) {
+          state.obstacles.push({
+            ...pos,
+            moving: Math.random() < 0.3,
+            moveDir: [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT][Math.floor(Math.random() * 4)],
+            lastMoveTime: 0
+          });
+          occupied.push(pos);
+        }
+      }
+    }
+
+    function spawnPowerUps() {
+      state.powerUps = [];
+      const occupied = [state.snake[0], state.food, ...state.obstacles];
+
+      for (let i = 0; i < POWERUP_COUNT; i++) {
+        let pos;
+        let attempts = 0;
+        do {
+          pos = randomGridPos(occupied);
+          attempts++;
+        } while (attempts < 100 && isOccupied(pos, occupied));
+
+        if (attempts < 100) {
+          state.powerUps.push({
+            ...pos,
+            type: Math.random() < 0.5 ? 'speedUp' : 'speedDown'
+          });
+          occupied.push(pos);
+        }
+      }
+    }
+
+    function moveSnake() {
+      state.direction = state.nextDirection;
+      const head = state.snake[0];
+      const newHead = {
+        x: head.x + state.direction.x,
+        y: head.y + state.direction.y
+      };
+
+      // Wall collision — wrap to opposite side
+      if (newHead.x < 0) newHead.x = GRID_SIZE - 1;
+      if (newHead.x >= GRID_SIZE) newHead.x = 0;
+      if (newHead.y < 0) newHead.y = GRID_SIZE - 1;
+      if (newHead.y >= GRID_SIZE) newHead.y = 0;
+
+      // Self collision — shrink by 1 segment
+      const selfHitIndex = state.snake.findIndex((seg, i) => i > 0 && posEquals(seg, newHead));
+      if (selfHitIndex !== -1) {
+        playObstacleHit();
+        // Remove segments from tail up to (and including) the hit segment
+        state.snake = state.snake.slice(0, selfHitIndex);
+        if (state.snake.length < 1) {
+          playGameOver();
+          gameOver();
+          return;
+        }
+      }
+
+      // Obstacle collision
+      const obstacleHit = state.obstacles.find(obs => posEquals(obs, newHead));
+      if (obstacleHit) {
+        playObstacleHit();
+        state.snake.pop();
+        if (state.snake.length < 1) {
+          playGameOver();
+          gameOver();
+          return;
+        }
+      }
+
+      state.snake.unshift(newHead);
+
+      // Food collision
+      if (posEquals(newHead, state.food)) {
+        playEat();
+        state.score += 10;
+        spawnFood();
+        checkLevelUp();
+      } else {
+        state.snake.pop();
+      }
+
+      // Power-up collision
+      const powerUpIndex = state.powerUps.findIndex(p => posEquals(p, newHead));
+      if (powerUpIndex !== -1) {
+        const powerUp = state.powerUps[powerUpIndex];
+        playPowerUp();
+        state.powerUps.splice(powerUpIndex, 1);
+
+        if (powerUp.type === 'speedUp') {
+          state.speedMultiplier = 1.5;
+        } else {
+          state.speedMultiplier = 0.75;
+        }
+
+        if (state.speedTimer) {
+          clearTimeout(state.speedTimer);
+        }
+        state.speedTimer = setTimeout(() => {
+          state.speedMultiplier = 1;
+        }, POWERUP_DURATION);
+      }
+    }
+
+    function moveObstacles(timestamp) {
+      state.obstacles.forEach(obs => {
+        if (obs.moving) {
+          if (!obs.lastMoveTime || timestamp - obs.lastMoveTime > 200) {
+            const newX = obs.x + obs.moveDir.x;
+            const newY = obs.y + obs.moveDir.y;
+
+            if (newX < 0 || newX >= GRID_SIZE || newY < 0 || newY >= GRID_SIZE) {
+              obs.moveDir = {
+                x: -obs.moveDir.x,
+                y: -obs.moveDir.y
+              };
+            } else {
+              obs.x = newX;
+              obs.y = newY;
+            }
+            obs.lastMoveTime = timestamp;
+          }
+        }
+      });
+    }
+
+    function checkLevelUp() {
+      if (state.level < 5 && state.score >= LEVEL_THRESHOLDS[state.level - 1]) {
+        state.level++;
+        playLevelUp();
+        showLevelUp();
+        spawnObstacles();
+        spawnPowerUps();
+
+        // Speed up slightly each level
+        state.speed = Math.max(60, BASE_SPEED - (state.level - 1) * 10);
+      } else if (state.level === 5 && state.score >= LEVEL_THRESHOLDS[4]) {
+        win();
+      }
+    }
+
+    function showLevelUp() {
+      state.gameState = GameState.LEVEL_UP;
+      showOverlay(`LEVEL ${state.level}`, `<p class="blink">GET READY!</p>`);
+
+      setTimeout(() => {
+        if (state.gameState === GameState.LEVEL_UP) {
+          state.gameState = GameState.PLAYING;
+          hideOverlay();
+        }
+      }, 1500);
+    }
+
+    function gameOver() {
+      state.gameState = GameState.GAME_OVER;
+
+      if (state.score > state.highScore) {
+        state.highScore = state.score;
+        localStorage.setItem('greedSnakeHighScore', state.highScore);
+      }
+
+      showOverlay(
+        'GAME OVER',
+        `<p class="score-display">SCORE: ${state.score}</p>` +
+        `<p>HI-SCORE: ${state.highScore}</p>` +
+        `<p class="blink" style="margin-top:20px">PRESS SPACE TO RESTART</p>`
+      );
+    }
+
+    function win() {
+      state.gameState = GameState.WIN;
+      playWin();
+
+      if (state.score > state.highScore) {
+        state.highScore = state.score;
+        localStorage.setItem('greedSnakeHighScore', state.highScore);
+      }
+
+      showOverlay(
+        'YOU WIN!',
+        `<p class="score-display">FINAL SCORE: ${state.score}</p>` +
+        `<p>HI-SCORE: ${state.highScore}</p>` +
+        `<p class="blink" style="margin-top:20px">PRESS SPACE TO RESTART</p>`
+      );
+    }
+
+    function showOverlay(title, content) {
+      overlay.innerHTML = `<h1>${title}</h1>${content}`;
+      overlay.classList.remove('hidden');
+    }
+
+    function hideOverlay() {
+      overlay.classList.add('hidden');
+    }
+
+    // ============ RENDERING ============
+    function render(timestamp) {
+      // Clear
+      ctx.fillStyle = COLORS.background;
+      ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+      // Grid lines
+      ctx.strokeStyle = COLORS.gridLine;
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= GRID_SIZE; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * CELL_SIZE, 0);
+        ctx.lineTo(i * CELL_SIZE, CANVAS_SIZE);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i * CELL_SIZE);
+        ctx.lineTo(CANVAS_SIZE, i * CELL_SIZE);
+        ctx.stroke();
+      }
+
+      if (state.gameState === GameState.START) return;
+
+      // Obstacles
+      ctx.shadowBlur = 5;
+      ctx.shadowColor = COLORS.obstacle;
+      ctx.fillStyle = COLORS.obstacle;
+      state.obstacles.forEach(obs => {
+        ctx.fillRect(obs.x * CELL_SIZE + 4, obs.y * CELL_SIZE + 4, CELL_SIZE - 8, CELL_SIZE - 8);
+      });
+
+      // Food (pulsing)
+      if (state.food) {
+        state.pulsePhase += 0.1;
+        const scale = 0.9 + 0.2 * Math.sin(state.pulsePhase);
+        const foodSize = (CELL_SIZE - 8) * scale;
+        const offset = (CELL_SIZE - foodSize) / 2;
+
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = COLORS.food;
+        ctx.fillStyle = COLORS.food;
+        ctx.fillRect(state.food.x * CELL_SIZE + offset, state.food.y * CELL_SIZE + offset, foodSize, foodSize);
+      }
+
+      // Power-ups
+      state.powerUps.forEach(powerUp => {
+        const color = powerUp.type === 'speedUp' ? COLORS.speedUp : COLORS.speedDown;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = color;
+        ctx.fillStyle = color;
+
+        const cx = powerUp.x * CELL_SIZE + CELL_SIZE / 2;
+        const cy = powerUp.y * CELL_SIZE + CELL_SIZE / 2;
+        const radius = (CELL_SIZE - 10) / 2;
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Icon
+        ctx.fillStyle = '#000';
+        ctx.font = '10px Press Start 2P';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(powerUp.type === 'speedUp' ? '+' : '-', cx, cy);
+      });
+
+      // Snake
+      state.snake.forEach((seg, i) => {
+        const isHead = i === 0;
+        const t = i / state.snake.length;
+
+        if (isHead) {
+          ctx.shadowBlur = 20;
+          ctx.shadowColor = COLORS.snakeHead;
+          ctx.fillStyle = COLORS.snakeHead;
+        } else {
+          ctx.shadowBlur = 10;
+          ctx.shadowColor = COLORS.snakeBody;
+          // Gradient from head to tail
+          const r = Math.round(0 + t * 0);
+          const g = Math.round(255 - t * 51);
+          const b = Math.round(136 - t * 68);
+          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        }
+
+        const padding = isHead ? 2 : 4;
+        ctx.fillRect(
+          seg.x * CELL_SIZE + padding,
+          seg.y * CELL_SIZE + padding,
+          CELL_SIZE - padding * 2,
+          CELL_SIZE - padding * 2
+        );
+      });
+
+      ctx.shadowBlur = 0;
+
+      // UI
+      ctx.fillStyle = '#fff';
+      ctx.font = '12px "Press Start 2P", monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`SCORE: ${state.score}`, 15, 25);
+
+      ctx.textAlign = 'right';
+      ctx.fillText(`HI: ${state.highScore}`, CANVAS_SIZE - 15, 25);
+
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillText(`LV: ${state.level}`, 15, CANVAS_SIZE - 10);
+
+      // Speed indicator
+      if (state.speedMultiplier !== 1) {
+        ctx.textAlign = 'right';
+        ctx.fillStyle = state.speedMultiplier > 1 ? COLORS.speedUp : COLORS.speedDown;
+        ctx.fillText(state.speedMultiplier > 1 ? 'FAST!' : 'SLOW!', CANVAS_SIZE - 15, CANVAS_SIZE - 10);
+      }
+    }
+
+    // ============ GAME LOOP ============
+    let lastTimestamp = 0;
+
+    function gameLoop(timestamp) {
+      if (state.gameState === GameState.PLAYING) {
+        // Move obstacles
+        moveObstacles(timestamp);
+
+        // Move snake
+        const currentSpeed = state.speed / state.speedMultiplier;
+        if (timestamp - state.lastMoveTime > currentSpeed) {
+          moveSnake();
+          state.lastMoveTime = timestamp;
+        }
+      }
+
+      render(timestamp);
+      requestAnimationFrame(gameLoop);
+    }
+
+    // ============ INIT ============
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>

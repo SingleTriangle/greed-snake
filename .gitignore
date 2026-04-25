@@ -1,0 +1,24 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Build artifacts (these are development intermediates, not needed for the game)
+greed-snake-game-builder/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Node (if any)
+node_modules/
+package-lock.json
+
+# Python (if any)
+__pycache__/
+*.pyc
+.env
