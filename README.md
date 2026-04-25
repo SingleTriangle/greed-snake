@@ -2,7 +2,7 @@
 
 A retro pixel-art snake game built with HTML5 Canvas and Web Audio API — no external dependencies, fully self-contained in a single HTML file.
 
-[Live Demo](https://your-github-username.github.io/greed-snake) · [简体中文](./GAME_GUIDE.md)
+[Live Demo](https://github.com/SingleTriangle/greed-snake) · [简体中文](./GAME_GUIDE.md)
 
 ---
 
